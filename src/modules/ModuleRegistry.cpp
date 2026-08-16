@@ -3,6 +3,8 @@
 #include "visual/motionblur.hpp"
 #include "visual/fpsunlocker.hpp"
 #include "visual/fogcolor.hpp"
+#include "visual/glintcolor.hpp"
+#include "visual/tnttimer.hpp"
 #include "visual/nofog.hpp"
 #include "hud/pingcounter.hpp"
 #include "hud/reachcounter.hpp"
@@ -13,7 +15,9 @@
 #include "player/weatherchanger.hpp"
 #include "player/nick.hpp"
 #include "misc/nodisconnect.hpp"
+#include "misc/chattimestamps.hpp"
 #include "misc/notouchborder.hpp"
+#include "misc/forceglobalrp.hpp"
 #include "misc/cpslimiter.hpp"
 #include "hud/speeddisplay.hpp"
 #include "hud/debugmenu.hpp"
@@ -78,6 +82,8 @@ void registerAllModules() {
     registry.emplace<FullbrightModule>();
     registry.emplace<MotionBlurModule>();
     registry.emplace<FogColorModule>();
+    registry.emplace<GlintColorModule>();
+    registry.emplace<TntTimerModule>();
     registry.emplace<NoFogModule>();
     registry.emplace<PingCounterModule>();
     registry.emplace<ReachCounterModule>();
@@ -89,6 +95,7 @@ void registerAllModules() {
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();
+    registry.emplace<ChatTimestampsModule>();
     registry.emplace<NoTouchBorderModule>();
     registry.emplace<CpsLimiterModule>();
     registry.emplace<SpeedDisplayModule>();
@@ -108,5 +115,6 @@ void registerAllModules() {
     registry.emplace<LightOverlayModule>();
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
+    registry.emplace<ForceGlobalRPModule>();
     registry.emplace<VeinMinerModule>();
 }
