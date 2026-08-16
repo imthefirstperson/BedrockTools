@@ -27,7 +27,7 @@ using namespace bedrocktools::memory;
 // ─── Ore / log allow-list ─────────────────────────────────────────────────────
 // Matches the full Bedrock 1.26 block name string as returned by BlockType::mNameInfo.
 
-static constexpr std::array<const char*, 27> kAllowedBlocks {{
+static constexpr std::array<const char*, 28> kAllowedBlocks {{
     // ── Overworld ores ───────────────────────────────────────────────────────
     "minecraft:coal_ore",              "minecraft:deepslate_coal_ore",
     "minecraft:iron_ore",              "minecraft:deepslate_iron_ore",
