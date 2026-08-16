@@ -3,11 +3,9 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
-#include <bedrocktools/sdk/Types.hpp>
-#include <bedrocktools/sdk/client/ClientInstance.hpp>
-#include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/world/Level.hpp>
 #include <bedrocktools/sdk/world/HitResult.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/world/Dimension.hpp>
 #include "core/GameHooks.hpp"
 
@@ -24,354 +22,755 @@ using namespace bedrocktools;
 using namespace bedrocktools::sdk;
 using namespace bedrocktools::memory;
 
-// ─── Ore / log allow-list ─────────────────────────────────────────────────────
-// Matches the full Bedrock 1.26 block name string as returned by BlockType::mNameInfo.
+// -----------------------------------------------------------------------------
+// Local ABI-compatible BlockPos.
+//
+// IMPORTANT:
+// Do not replace this with bedrocktools::sdk::BlockPos. Some BedrockTools
+// versions do not expose that type in the SDK headers, while the native
+// function still expects the same three-int layout.
+// -----------------------------------------------------------------------------
 
-static constexpr std::array<const char*, 28> kAllowedBlocks {{
-    // ── Overworld ores ───────────────────────────────────────────────────────
-    "minecraft:coal_ore",              "minecraft:deepslate_coal_ore",
-    "minecraft:iron_ore",              "minecraft:deepslate_iron_ore",
-    "minecraft:copper_ore",            "minecraft:deepslate_copper_ore",
-    "minecraft:gold_ore",              "minecraft:deepslate_gold_ore",
-    "minecraft:redstone_ore",          "minecraft:deepslate_redstone_ore",
-    "minecraft:lit_redstone_ore",      "minecraft:lit_deepslate_redstone_ore",
-    "minecraft:lapis_ore",             "minecraft:deepslate_lapis_ore",
-    "minecraft:diamond_ore",           "minecraft:deepslate_diamond_ore",
-    "minecraft:emerald_ore",           "minecraft:deepslate_emerald_ore",
-    // ── Nether ores ──────────────────────────────────────────────────────────
+struct VeinMinerBlockPos {
+    int x;
+    int y;
+    int z;
+};
+
+// BlockSource::getBlock(BlockPos const&)
+using BlockSourceGetBlockFn =
+    void* (*)(void*, const VeinMinerBlockPos&);
+
+// -----------------------------------------------------------------------------
+// Allowed blocks
+// -----------------------------------------------------------------------------
+
+static constexpr std::array<const char*, 28> kAllowedBlocks{{
+    "minecraft:coal_ore",
+    "minecraft:deepslate_coal_ore",
+
+    "minecraft:iron_ore",
+    "minecraft:deepslate_iron_ore",
+
+    "minecraft:copper_ore",
+    "minecraft:deepslate_copper_ore",
+
+    "minecraft:gold_ore",
+    "minecraft:deepslate_gold_ore",
+
+    "minecraft:redstone_ore",
+    "minecraft:deepslate_redstone_ore",
+
+    "minecraft:lit_redstone_ore",
+    "minecraft:lit_deepslate_redstone_ore",
+
+    "minecraft:lapis_ore",
+    "minecraft:deepslate_lapis_ore",
+
+    "minecraft:diamond_ore",
+    "minecraft:deepslate_diamond_ore",
+
+    "minecraft:emerald_ore",
+    "minecraft:deepslate_emerald_ore",
+
     "minecraft:nether_gold_ore",
     "minecraft:nether_quartz_ore",
     "minecraft:ancient_debris",
-    // ── Logs (all 6 axes are the same block name; state is ignored) ──────────
-    "minecraft:oak_log",               "minecraft:spruce_log",
-    "minecraft:birch_log",             "minecraft:jungle_log",
-    "minecraft:acacia_log",            "minecraft:dark_oak_log",
-    "minecraft:mangrove_log",
+
+    "minecraft:oak_log",
+    "minecraft:spruce_log",
+    "minecraft:birch_log",
+    "minecraft:jungle_log",
+    "minecraft:acacia_log",
+    "minecraft:dark_oak_log",
+    "minecraft:mangrove_log"
 }};
 
 bool VeinMinerModule::isAllowedBlock(const std::string& name) {
-    for (const char* allowed : kAllowedBlocks)
-        if (name == allowed) return true;
+    for (const char* allowed : kAllowedBlocks) {
+        if (name == allowed)
+            return true;
+    }
+
     return false;
 }
 
-// ─── Block name reader ────────────────────────────────────────────────────────
-//
-// Walk: Block* → BlockType* (+0x68) → NameInfo* (+0x88)
-//       → HashedString (full name) at +0x40 → std::string at HashedString+0x8
-//
-// Returns empty string on any null pointer in the chain.
+// -----------------------------------------------------------------------------
+// Block name
+// -----------------------------------------------------------------------------
 
-std::string VeinMinerModule::blockNameAt(void* blockSource, int x, int y, int z) {
-    using BlockSourceGetBlockFn = void*(*)(void*, int, int, int);
+std::string VeinMinerModule::blockNameAt(
+    void* blockSource,
+    int x,
+    int y,
+    int z
+) {
     static BlockSourceGetBlockFn sGetBlock = nullptr;
-    if (!sGetBlock)
-        sGetBlock = reinterpret_cast<BlockSourceGetBlockFn>(
-            resolve(SignatureId::BlockSourceGetBlock));
-    if (!sGetBlock || !blockSource) return {};
 
-    void* block = sGetBlock(blockSource, x, y, z);
-    if (!block) return {};
+    if (!sGetBlock) {
+        const uintptr_t address =
+            resolve(SignatureId::BlockSourceGetBlock);
 
-    void* blockType = field<void*>(block, offsets::Block::mBlockType);
-    if (!blockType) return {};
+        if (!address)
+            return {};
 
-    void* nameInfo = field<void*>(blockType, offsets::BlockType::mNameInfo);
-    if (!nameInfo) return {};
+        sGetBlock =
+            reinterpret_cast<BlockSourceGetBlockFn>(address);
+    }
 
-    // mFullName is a HashedString embedded at +0x40 inside nameInfo;
-    // the std::string member lives at HashedString+0x8.
-    auto* hashedBase = reinterpret_cast<std::uint8_t*>(nameInfo)
-                       + offsets::NameInfo::mFullName;
+    if (!sGetBlock || !blockSource)
+        return {};
 
-    return field<std::string>(hashedBase, offsets::HashedString::mString);
+    VeinMinerBlockPos pos{
+        x,
+        y,
+        z
+    };
+
+    void* block = sGetBlock(blockSource, pos);
+
+    if (!block)
+        return {};
+
+    void* blockType =
+        field<void*>(
+            block,
+            offsets::Block::mBlockType
+        );
+
+    if (!blockType)
+        return {};
+
+    void* nameInfo =
+        field<void*>(
+            blockType,
+            offsets::BlockType::mNameInfo
+        );
+
+    if (!nameInfo)
+        return {};
+
+    auto* fullNameBase =
+        reinterpret_cast<std::uint8_t*>(nameInfo)
+        + offsets::NameInfo::mFullName;
+
+    return field<std::string>(
+        fullNameBase,
+        offsets::HashedString::mString
+    );
 }
 
-// ─── BFS vein finder ─────────────────────────────────────────────────────────
-//
-// Starts from `origin` (the block the player just broke — already air in the
-// world, so the origin is NOT re-added to the result), fans out to all 6-face
-// neighbours, collecting positions whose block name matches `targetName`.
-// Stops when `limit` is reached or the frontier is exhausted.
+// -----------------------------------------------------------------------------
+// BFS
+// -----------------------------------------------------------------------------
 
-static constexpr std::array<IPos, 6> kFaceOffsets {{
-    IPos{ 1, 0, 0}, IPos{-1, 0, 0},
-    IPos{ 0, 1, 0}, IPos{ 0,-1, 0},
-    IPos{ 0, 0, 1}, IPos{ 0, 0,-1},
+static constexpr std::array<IPos, 6> kFaceOffsets{{
+    IPos{ 1, 0, 0},
+    IPos{-1, 0, 0},
+    IPos{ 0, 1, 0},
+    IPos{ 0,-1, 0},
+    IPos{ 0, 0, 1},
+    IPos{ 0, 0,-1}
 }};
 
-std::vector<IPos> VeinMinerModule::bfsVein(void* blockSource,
-                                            const IPos& origin,
-                                            const std::string& targetName,
-                                            int limit) {
-    if (!blockSource || targetName.empty()) return {};
+std::vector<IPos> VeinMinerModule::bfsVein(
+    void* blockSource,
+    const IPos& origin,
+    const std::string& targetName,
+    int limit
+) {
+    std::vector<IPos> result;
 
-    std::vector<IPos>          result;
-    std::queue<IPos>           frontier;
+    if (!blockSource ||
+        targetName.empty() ||
+        limit <= 0) {
+        return result;
+    }
+
+    std::queue<IPos> queue;
     std::unordered_set<IPos, IPosHash> visited;
 
-    // Seed with the six neighbours of the broken block.
-    // The origin itself is already gone; we don't queue it.
+    visited.reserve(static_cast<std::size_t>(limit) * 2 + 16);
+
     visited.insert(origin);
-    for (const auto& face : kFaceOffsets) {
-        IPos nb{ origin.x + face.x, origin.y + face.y, origin.z + face.z };
-        if (visited.insert(nb).second) {
-            std::string name = blockNameAt(blockSource, nb.x, nb.y, nb.z);
-            if (name == targetName) {
-                frontier.push(nb);
-                result.push_back(nb);
-            }
+
+    for (const IPos& offset : kFaceOffsets) {
+        IPos next{
+            origin.x + offset.x,
+            origin.y + offset.y,
+            origin.z + offset.z
+        };
+
+        if (!visited.insert(next).second)
+            continue;
+
+        const std::string name =
+            blockNameAt(
+                blockSource,
+                next.x,
+                next.y,
+                next.z
+            );
+
+        if (name == targetName) {
+            queue.push(next);
+            result.push_back(next);
+
+            if (static_cast<int>(result.size()) >= limit)
+                return result;
         }
     }
 
-    while (!frontier.empty() && static_cast<int>(result.size()) < limit) {
-        IPos cur = frontier.front();
-        frontier.pop();
+    while (!queue.empty() &&
+           static_cast<int>(result.size()) < limit) {
 
-        for (const auto& face : kFaceOffsets) {
-            if (static_cast<int>(result.size()) >= limit) break;
+        const IPos current = queue.front();
+        queue.pop();
 
-            IPos nb{ cur.x + face.x, cur.y + face.y, cur.z + face.z };
-            if (!visited.insert(nb).second) continue;
+        for (const IPos& offset : kFaceOffsets) {
+            if (static_cast<int>(result.size()) >= limit)
+                break;
 
-            std::string name = blockNameAt(blockSource, nb.x, nb.y, nb.z);
-            if (name != targetName) continue;
+            IPos next{
+                current.x + offset.x,
+                current.y + offset.y,
+                current.z + offset.z
+            };
 
-            frontier.push(nb);
-            result.push_back(nb);
+            if (!visited.insert(next).second)
+                continue;
+
+            const std::string name =
+                blockNameAt(
+                    blockSource,
+                    next.x,
+                    next.y,
+                    next.z
+                );
+
+            if (name != targetName)
+                continue;
+
+            queue.push(next);
+            result.push_back(next);
         }
     }
 
     return result;
 }
 
-// ─── Packet helpers ───────────────────────────────────────────────────────────
-//
-// Follows the same pattern as AutoReQ — CommandRequestPacket (ID 77) with
-// "/setblock x y z air destroy".
-//
-// This fires a server-side block removal that drops loot, triggers block update
-// events, and works identically to the player breaking the block manually.
-// Requires the world to have cheats enabled (i.e. the player can run /setblock).
-//
-// Field layout (relative to packet base pointer):
-//   payload         = pkt + Packet::Size (0x30)
-//   mCommand        = payload + 0          std::string
-//   mOrigin         = payload + 24         CommandOriginData
-//   CommandOriginData::mType = +0          uint8_t (0 = player)
-//   mInternalSource = payload + 84         bool
+// -----------------------------------------------------------------------------
+// Command packet
+// -----------------------------------------------------------------------------
 
-void VeinMinerModule::sendSetblock(void* clientInstance, const IPos& pos) {
-    using CreatePacketFn      = std::shared_ptr<void>(*)(int);
-    using GetPacketSenderFn   = void*(*)(void*);
-    using SendToServerFn      = void*(*)(void*, void*);
+void VeinMinerModule::sendSetblock(
+    void* clientInstance,
+    const IPos& pos
+) {
+    using CreatePacketFn =
+        std::shared_ptr<void> (*)(int);
 
-    static CreatePacketFn    sCreatePacket    = nullptr;
-    static GetPacketSenderFn sGetPacketSender = nullptr;
-    static SendToServerFn    sSendToServer    = nullptr;
+    using GetPacketSenderFn =
+        void* (*)(void*);
 
-    if (!sCreatePacket)
-        sCreatePacket = reinterpret_cast<CreatePacketFn>(
-            resolve(SignatureId::MinecraftPacketsCreatePacket));
-    if (!sGetPacketSender)
-        sGetPacketSender = reinterpret_cast<GetPacketSenderFn>(
-            resolve(SignatureId::ClientInstanceGetPacketSender));
-    if (!sSendToServer)
-        sSendToServer = reinterpret_cast<SendToServerFn>(
-            resolve(SignatureId::LoopbackPacketSenderSendToServer));
+    using SendToServerFn =
+        void* (*)(void*, void*);
 
-    if (!sCreatePacket || !sGetPacketSender || !sSendToServer || !clientInstance)
+    static CreatePacketFn createPacket = nullptr;
+    static GetPacketSenderFn getPacketSender = nullptr;
+    static SendToServerFn sendToServer = nullptr;
+
+    if (!createPacket) {
+        createPacket =
+            reinterpret_cast<CreatePacketFn>(
+                resolve(
+                    SignatureId::MinecraftPacketsCreatePacket
+                )
+            );
+    }
+
+    if (!getPacketSender) {
+        getPacketSender =
+            reinterpret_cast<GetPacketSenderFn>(
+                resolve(
+                    SignatureId::ClientInstanceGetPacketSender
+                )
+            );
+    }
+
+    if (!sendToServer) {
+        sendToServer =
+            reinterpret_cast<SendToServerFn>(
+                resolve(
+                    SignatureId::LoopbackPacketSenderSendToServer
+                )
+            );
+    }
+
+    if (!createPacket ||
+        !getPacketSender ||
+        !sendToServer ||
+        !clientInstance) {
+        return;
+    }
+
+    void* sender =
+        getPacketSender(clientInstance);
+
+    if (!sender)
         return;
 
-    void* sender = sGetPacketSender(clientInstance);
-    if (!sender) return;
-
-    // Build command string: "/setblock X Y Z air destroy"
-    // "destroy" mode drops the loot, triggers block updates, plays the sound —
-    // identical to a player break. Use "replace" for silent removal.
-    std::string cmd = "/setblock "
-        + std::to_string(pos.x) + " "
-        + std::to_string(pos.y) + " "
+    std::string command =
+        "/setblock "
+        + std::to_string(pos.x)
+        + " "
+        + std::to_string(pos.y)
+        + " "
         + std::to_string(pos.z)
         + " air destroy";
 
-    // Packet ID 77 = CommandRequestPacket
-    std::shared_ptr<void> pktSp = sCreatePacket(77);
-    void* pkt = pktSp.get();
-    if (!pkt) return;
+    std::shared_ptr<void> packet =
+        createPacket(77);
 
-    auto* payload = reinterpret_cast<std::uint8_t*>(pkt)
-                    + offsets::Packet::Size;
+    if (!packet)
+        return;
 
-    // mCommand (std::string at payload+0)
+    void* packetPtr = packet.get();
+
+    if (!packetPtr)
+        return;
+
+    auto payload =
+        reinterpret_cast<std::uintptr_t>(packetPtr)
+        + offsets::Packet::Size;
+
     *reinterpret_cast<std::string*>(
-        payload + offsets::CommandRequestPacketPayload::mCommand) = cmd;
+        payload +
+        offsets::CommandRequestPacketPayload::mCommand
+    ) = command;
 
-    // CommandOriginData::mType = 0 (player origin)
     *reinterpret_cast<std::uint8_t*>(
-        payload
-        + offsets::CommandRequestPacketPayload::mOrigin
-        + offsets::CommandOriginData::mType) = 0;
+        payload +
+        offsets::CommandRequestPacketPayload::mOrigin +
+        offsets::CommandOriginData::mType
+    ) = 0;
 
-    // mInternalSource = true (internal / trusted)
     *reinterpret_cast<bool*>(
-        payload + offsets::CommandRequestPacketPayload::mInternalSource) = true;
+        payload +
+        offsets::CommandRequestPacketPayload::mInternalSource
+    ) = true;
 
-    sSendToServer(sender, pkt);
+    sendToServer(
+        sender,
+        packetPtr
+    );
 }
 
-// ─── Module lifecycle ─────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Constructor / destructor
+// -----------------------------------------------------------------------------
 
 VeinMinerModule::VeinMinerModule()
-    : Module("Vein Miner",
-             "Break an ore or log and all connected blocks of the same type "
-             "are mined automatically. Requires cheats enabled on the world.") {}
+    : Module(
+        "Vein Miner",
+        "Break an ore or log and automatically mine connected blocks of the same type."
+      ) {
 
-VeinMinerModule::~VeinMinerModule() {
-    if (m_tickSub) events::bus().unsubscribe(m_tickSub);
+    showInMenu = true;
 }
 
-void VeinMinerModule::onInit() {}
+VeinMinerModule::~VeinMinerModule() {
+    if (m_tickSub) {
+        events::bus().unsubscribe(m_tickSub);
+        m_tickSub = 0;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Init
+// -----------------------------------------------------------------------------
+
+void VeinMinerModule::onInit() {
+}
+
+// -----------------------------------------------------------------------------
+// Enable
+// -----------------------------------------------------------------------------
 
 void VeinMinerModule::onEnable() {
-    m_watching  = false;
+    m_watching = false;
+    m_watchPos = {};
     m_watchName.clear();
+
     m_queue.clear();
-    m_queueIdx  = 0;
-    m_timerMs   = 0.0f;
+    m_queueIdx = 0;
+    m_timerMs = 0.0f;
 
-    m_tickSub = events::bus().subscribe<events::LocalPlayerTickEvent>(
-        [this](events::LocalPlayerTickEvent& ev) {
+    if (m_tickSub) {
+        events::bus().unsubscribe(m_tickSub);
+        m_tickSub = 0;
+    }
 
-        auto* player = ev.player;
-        if (!player) return;
+    m_tickSub =
+        events::bus().subscribe<
+            events::LocalPlayerTickEvent
+        >(
+            [this](events::LocalPlayerTickEvent& event) {
 
-        // ── Sneak gate ────────────────────────────────────────────────────────
-        // Categories bitmask: bit 0x40 is the sneak flag in Bedrock 1.26.
-        if (requireSneaking && !(player->categories() & 0x40u))
-            return;
+                auto* player = event.player;
 
-        // ── Resolve block source ──────────────────────────────────────────────
-        auto* dim = player->dimension();
-        void* blockSource = dim
-            ? field<void*>(dim, offsets::Dimension::mBlockSource)
-            : nullptr;
+                if (!player)
+                    return;
 
-        // ── Break detection ───────────────────────────────────────────────────
-        // Read stored hit result from the Level each tick.
-        auto* level      = player->level();
-        auto* hitResult  = level ? level->storedHitResult() : nullptr;
+                // -------------------------------------------------------------
+                // Optional sneak requirement
+                // -------------------------------------------------------------
 
-        if (m_watching && blockSource && !m_watchName.empty()) {
-            // Check whether the block we were watching has become air.
-            std::string current = blockNameAt(blockSource,
-                                              m_watchPos.x, m_watchPos.y, m_watchPos.z);
-            bool isAir = current.empty()
-                      || current == "minecraft:air"
-                      || current.find("air") != std::string::npos;
-
-            if (isAir && m_queue.empty()) {
-                // Block is gone — run the BFS from its position.
-                bool allowed = !oresOnly || isAllowedBlock(m_watchName);
-                if (allowed) {
-                    m_queue    = bfsVein(blockSource, m_watchPos, m_watchName, maxBlocks);
-                    m_queueIdx = 0;
-                    m_timerMs  = 0.0f;
+                if (requireSneaking) {
+                    if (!(player->categories() & 0x40u))
+                        return;
                 }
-                // Stop watching whether we queued anything or not.
-                m_watching = false;
-                m_watchName.clear();
-            }
-        }
 
-        // ── Update watch target ───────────────────────────────────────────────
-        // type() == 1  →  block hit
-        // type() == 2  →  entity hit
-        // type() == 0  →  miss
-        if (hitResult && hitResult->type() == 1 && blockSource) {
-            const Vec3& fp = hitResult->position();
-            IPos bp{
-                static_cast<int>(std::floor(fp.x)),
-                static_cast<int>(std::floor(fp.y)),
-                static_cast<int>(std::floor(fp.z))
-            };
+                // -------------------------------------------------------------
+                // Dimension / BlockSource
+                // -------------------------------------------------------------
 
-            std::string name = blockNameAt(blockSource, bp.x, bp.y, bp.z);
-            bool isAir = name.empty() || name.find("air") != std::string::npos;
+                auto* dimension =
+                    player->dimension();
 
-            if (!isAir) {
-                // A real block is under the crosshair — start/update the watch.
-                m_watching  = true;
-                m_watchPos  = bp;
-                m_watchName = name;
-            } else if (!m_watching) {
-                // Hit result is on air (can happen during transition) — nothing to watch.
-                m_watchName.clear();
-            }
-        } else if (!m_watching) {
-            // Not targeting a block and nothing previously watched.
-            m_watchName.clear();
-        }
+                void* blockSource = nullptr;
 
-        // ── Process break queue ───────────────────────────────────────────────
-        if (!m_queue.empty() && m_queueIdx < m_queue.size()) {
-            // Approximate tick delta: LocalPlayerTickEvent fires at ~20 Hz (50 ms/tick).
-            m_timerMs += 50.0f;
+                if (dimension) {
+                    blockSource =
+                        field<void*>(
+                            dimension,
+                            offsets::Dimension::mBlockSource
+                        );
+                }
 
-            if (m_timerMs >= breakDelayMs) {
-                m_timerMs = 0.0f;
+                if (!blockSource)
+                    return;
 
-                void* ci = bedrocktools::core::gamehooks::clientInstance();
-                if (ci) {
-                    // Verify the block is still there before sending the command.
-                    // Skips already-broken blocks (e.g. TNT chain or another player).
-                    const IPos& target = m_queue[m_queueIdx];
-                    if (blockSource) {
-                        std::string cur = blockNameAt(blockSource,
-                                                      target.x, target.y, target.z);
-                        bool stillThere = !cur.empty() && cur.find("air") == std::string::npos;
-                        if (stillThere) {
-                            sendSetblock(ci, target);
+                // -------------------------------------------------------------
+                // Level / hit result
+                // -------------------------------------------------------------
+
+                auto* level =
+                    player->level();
+
+                auto* hitResult =
+                    level
+                    ? level->storedHitResult()
+                    : nullptr;
+
+                // -------------------------------------------------------------
+                // Detect completion of the watched block
+                // -------------------------------------------------------------
+
+                if (m_watching &&
+                    !m_watchName.empty()) {
+
+                    const std::string current =
+                        blockNameAt(
+                            blockSource,
+                            m_watchPos.x,
+                            m_watchPos.y,
+                            m_watchPos.z
+                        );
+
+                    const bool isAir =
+                        current.empty() ||
+                        current == "minecraft:air" ||
+                        current.find("air") != std::string::npos;
+
+                    if (isAir) {
+
+                        const bool allowed =
+                            !oresOnly ||
+                            isAllowedBlock(m_watchName);
+
+                        if (allowed) {
+
+                            m_queue =
+                                bfsVein(
+                                    blockSource,
+                                    m_watchPos,
+                                    m_watchName,
+                                    maxBlocks
+                                );
+
+                            m_queueIdx = 0;
+                            m_timerMs = 0.0f;
                         }
-                    } else {
-                        sendSetblock(ci, m_queue[m_queueIdx]);
+
+                        m_watching = false;
+                        m_watchName.clear();
                     }
                 }
 
-                ++m_queueIdx;
+                // -------------------------------------------------------------
+                // Find the block currently under the crosshair
+                // -------------------------------------------------------------
+
+                if (hitResult &&
+                    hitResult->type() == 1) {
+
+                    /*
+                     * HitResult::position() is a floating-point hit location,
+                     * not necessarily the integer block origin.
+                     *
+                     * We use the ray direction and move the hit point a tiny
+                     * amount back toward the player before flooring it. This
+                     * prevents a hit exactly on a block face from selecting
+                     * the neighbouring block.
+                     */
+
+                    const auto& start =
+                        hitResult->startPosition();
+
+                    const auto& hit =
+                        hitResult->position();
+
+                    float dx =
+                        hit.x - start.x;
+
+                    float dy =
+                        hit.y - start.y;
+
+                    float dz =
+                        hit.z - start.z;
+
+                    const float length =
+                        std::sqrt(
+                            dx * dx +
+                            dy * dy +
+                            dz * dz
+                        );
+
+                    float sampleX = hit.x;
+                    float sampleY = hit.y;
+                    float sampleZ = hit.z;
+
+                    if (length > 0.0001f) {
+
+                        constexpr float epsilon = 0.001f;
+
+                        dx /= length;
+                        dy /= length;
+                        dz /= length;
+
+                        sampleX -= dx * epsilon;
+                        sampleY -= dy * epsilon;
+                        sampleZ -= dz * epsilon;
+                    }
+
+                    IPos blockPos{
+                        static_cast<int>(
+                            std::floor(sampleX)
+                        ),
+                        static_cast<int>(
+                            std::floor(sampleY)
+                        ),
+                        static_cast<int>(
+                            std::floor(sampleZ)
+                        )
+                    };
+
+                    const std::string name =
+                        blockNameAt(
+                            blockSource,
+                            blockPos.x,
+                            blockPos.y,
+                            blockPos.z
+                        );
+
+                    const bool isAir =
+                        name.empty() ||
+                        name.find("air") != std::string::npos;
+
+                    if (!isAir) {
+
+                        /*
+                         * Only replace the watched target when the target
+                         * actually changed. This prevents the watch state from
+                         * constantly resetting while the player is mining.
+                         */
+
+                        if (!m_watching ||
+                            m_watchPos.x != blockPos.x ||
+                            m_watchPos.y != blockPos.y ||
+                            m_watchPos.z != blockPos.z ||
+                            m_watchName != name) {
+
+                            m_watching = true;
+                            m_watchPos = blockPos;
+                            m_watchName = name;
+                        }
+                    }
+                }
+                else if (!m_watching) {
+                    m_watchName.clear();
+                }
+
+                // -------------------------------------------------------------
+                // Process queued vein blocks
+                // -------------------------------------------------------------
+
+                if (m_queue.empty())
+                    return;
+
                 if (m_queueIdx >= m_queue.size()) {
                     m_queue.clear();
                     m_queueIdx = 0;
+                    m_timerMs = 0.0f;
+                    return;
+                }
+
+                /*
+                 * LocalPlayerTickEvent is approximately 20 Hz.
+                 *
+                 * Do not send every block in the same tick. Apart from being
+                 * unnecessary, that can make the client/server command queue
+                 * unstable on larger veins.
+                 */
+
+                m_timerMs += 50.0f;
+
+                const float delay =
+                    std::max(
+                        0.0f,
+                        breakDelayMs
+                    );
+
+                if (m_timerMs < delay)
+                    return;
+
+                m_timerMs = 0.0f;
+
+                void* clientInstance =
+                    bedrocktools::core::gamehooks::clientInstance();
+
+                if (!clientInstance)
+                    return;
+
+                const IPos target =
+                    m_queue[m_queueIdx];
+
+                // -------------------------------------------------------------
+                // Make sure the target still exists.
+                // -------------------------------------------------------------
+
+                const std::string current =
+                    blockNameAt(
+                        blockSource,
+                        target.x,
+                        target.y,
+                        target.z
+                    );
+
+                const bool stillThere =
+                    !current.empty() &&
+                    current.find("air") == std::string::npos;
+
+                if (stillThere) {
+
+                    /*
+                     * Only mine the exact same block type.
+                     *
+                     * This is important for redstone, lit redstone and
+                     * deepslate variants.
+                     */
+
+                    if (!m_watchName.empty() &&
+                        current != m_watchName) {
+
+                        ++m_queueIdx;
+                    }
+                    else {
+                        sendSetblock(
+                            clientInstance,
+                            target
+                        );
+
+                        ++m_queueIdx;
+                    }
+                }
+                else {
+                    ++m_queueIdx;
+                }
+
+                // -------------------------------------------------------------
+                // Queue finished
+                // -------------------------------------------------------------
+
+                if (m_queueIdx >= m_queue.size()) {
+                    m_queue.clear();
+                    m_queueIdx = 0;
+                    m_timerMs = 0.0f;
                 }
             }
-        }
-    });
+        );
 }
+
+// -----------------------------------------------------------------------------
+// Disable
+// -----------------------------------------------------------------------------
 
 void VeinMinerModule::onDisable() {
-    events::bus().unsubscribe(m_tickSub);
-    m_tickSub = 0;
+    if (m_tickSub) {
+        events::bus().unsubscribe(m_tickSub);
+        m_tickSub = 0;
+    }
+
     m_watching = false;
+    m_watchPos = {};
     m_watchName.clear();
+
     m_queue.clear();
     m_queueIdx = 0;
-    m_timerMs  = 0.0f;
+    m_timerMs = 0.0f;
 }
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Config
+// -----------------------------------------------------------------------------
 
-void VeinMinerModule::loadConfig(const nlohmann::json& j) {
+void VeinMinerModule::loadConfig(
+    const nlohmann::json& j
+) {
     Module::loadConfig(j);
-    if (j.contains("maxBlocks"))       maxBlocks       = j["maxBlocks"].get<int>();
-    if (j.contains("oresOnly"))        oresOnly        = j["oresOnly"].get<bool>();
-    if (j.contains("requireSneaking")) requireSneaking = j["requireSneaking"].get<bool>();
-    if (j.contains("breakDelayMs"))    breakDelayMs    = j["breakDelayMs"].get<float>();
+
+    if (j.contains("maxBlocks"))
+        maxBlocks =
+            j["maxBlocks"].get<int>();
+
+    if (j.contains("oresOnly"))
+        oresOnly =
+            j["oresOnly"].get<bool>();
+
+    if (j.contains("requireSneaking"))
+        requireSneaking =
+            j["requireSneaking"].get<bool>();
+
+    if (j.contains("breakDelayMs"))
+        breakDelayMs =
+            j["breakDelayMs"].get<float>();
 }
 
-void VeinMinerModule::saveConfig(nlohmann::json& j) {
+void VeinMinerModule::saveConfig(
+    nlohmann::json& j
+) {
     Module::saveConfig(j);
-    j["maxBlocks"]       = maxBlocks;
-    j["oresOnly"]        = oresOnly;
-    j["requireSneaking"] = requireSneaking;
-    j["breakDelayMs"]    = breakDelayMs;
+
+    j["maxBlocks"] =
+        maxBlocks;
+
+    j["oresOnly"] =
+        oresOnly;
+
+    j["requireSneaking"] =
+        requireSneaking;
+
+    j["breakDelayMs"] =
+        breakDelayMs;
 }
