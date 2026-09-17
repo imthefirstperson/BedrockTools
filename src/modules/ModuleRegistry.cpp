@@ -47,6 +47,7 @@
 #include "misc/hiveutils.hpp"
 #include "visual/swingmodifier.hpp"
 #include "visual/oreesp.hpp"
+#include "visual/trajectorypredictor.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -137,4 +138,5 @@ void registerAllModules() {
     registry.emplace<ConnectedGlassModule>();
     registry.emplace<ForceGlobalRPModule>();
     registry.emplace<OreEspModule>();
+    registry.emplace<TrajectoryPredictorModule>();
 }
