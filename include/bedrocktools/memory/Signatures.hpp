@@ -68,7 +68,6 @@ enum class SignatureId : std::uint16_t {
     LevelGetHitResult,
     BlockSourceGetBiome,
     BlockSourceGetBlock,
-    BlockSourceGetBlockEntity,
     BlockSourceGetBrightness,
     BlockSourceIsSolidBlockingBlock,
     LocalPlayerApplyTurnDelta,
