@@ -9,7 +9,7 @@ The source is public so people can study how a real LeviLauncher mod is structur
 ## Features
 
 - Native C++20 mod built for LeviLauncher and Preloader
-- 37 configurable modules
+- 38 configurable modules
 - Public headers for Minecraft wrappers, offsets, signatures, and utilities
 - Typed event system with runtime subscriptions for other native mods
 - LeviLauncher mod-menu integration and persistent configuration
@@ -21,7 +21,7 @@ The source is public so people can study how a real LeviLauncher mod is structur
 
 **HUD:** Ping Counter, Reach Counter, Combo Display, Break Indicator, Player Coords, Compass, Speed Display, Debug Menu, Keystrokes, Tablist
 
-**Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ
+**Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ, Fast Mine
 
 **Misc:** No Disconnect, Chat Timestamps, No Touch Border, CPS Limiter
 
